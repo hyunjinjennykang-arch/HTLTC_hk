@@ -1,0 +1,369 @@
+---
+title: "Final Session — Solutions"
+subtitle: "Statistical Tests · UpSet Plots · Custom Functions"
+format:
+  html:
+    toc: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(tidyverse)
+library(ggplot2)
+options(digits = 4)
+```
+
+---
+
+## The Dataset: `iris`
+
+```{r}
+# Load and preview the iris dataset
+data(iris)
+glimpse(iris)
+
+# Quick summary by species
+iris |>
+  group_by(Species) |>
+  summarize(
+    mean_sepal_length = mean(Sepal.Length),
+    mean_petal_length = mean(Petal.Length),
+    n                 = n()
+  )
+```
+
+---
+
+## Part 1: Statistical Tests
+
+### 1a. Visualize the data first
+
+```{r}
+# Always plot before testing — it reveals the structure of your data
+ggplot(iris, aes(x = Species, y = Sepal.Length, fill = Species)) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  geom_jitter(width = 0.15, alpha = 0.4) +
+  labs(title = "Sepal Length by Species", y = "Sepal Length (cm)") +
+  theme_minimal()
+```
+
+### 1b. Check normality within each species
+
+```{r}
+# Shapiro-Wilk test: H0 = data are normally distributed
+# A non-significant p-value (p > 0.05) means we do NOT reject normality
+
+shapiro.test(iris$Sepal.Length[iris$Species == "setosa"])
+shapiro.test(iris$Sepal.Length[iris$Species == "versicolor"])
+shapiro.test(iris$Sepal.Length[iris$Species == "virginica"])
+
+# Q-Q plots for visual confirmation
+par(mfrow = c(1, 3))
+for (sp in levels(iris$Species)) {
+  qqnorm(iris$Sepal.Length[iris$Species == sp], main = sp)
+  qqline(iris$Sepal.Length[iris$Species == sp])
+}
+par(mfrow = c(1, 1))
+```
+
+### 1c. One-sample t-test
+
+```{r}
+# Question: Is the mean Sepal.Length of setosa equal to 5.0 cm?
+# H0: mu = 5.0   H1: mu ≠ 5.0
+
+setosa <- iris[iris$Species == "setosa", ]
+
+result_one_sample <- t.test(setosa$Sepal.Length, mu = 5.0)
+result_one_sample
+
+# Interpretation:
+# t-statistic, degrees of freedom (n-1 = 49), p-value, and 95% CI
+# If p < 0.05 we reject H0 that the mean equals 5.0
+```
+
+### 1d. Two-sample t-test (Welch's, unequal variances)
+
+```{r}
+# Question: Is Sepal.Length different between setosa and versicolor?
+# H0: mu_setosa = mu_versicolor
+
+versicolor <- iris[iris$Species == "versicolor", ]
+
+result_two_sample <- t.test(setosa$Sepal.Length,
+                             versicolor$Sepal.Length)
+result_two_sample
+
+# Formula interface — cleaner syntax for subsetting
+sub2 <- iris[iris$Species != "virginica", ]
+t.test(Sepal.Length ~ Species, data = sub2)
+```
+
+```{r}
+# Check equal variances first (F-test)
+# H0: variances are equal
+var.test(Sepal.Length ~ Species, data = sub2)
+
+# If variances are equal (p > 0.05), can use var.equal = TRUE (Student's t)
+t.test(Sepal.Length ~ Species, data = sub2, var.equal = TRUE)
+```
+
+### 1e. One-sample Z-test
+
+```{r}
+# Z-test: use when population sigma is known (rare in practice)
+# For large n, t-test and Z-test give nearly identical results
+# install.packages("BSDA") if needed
+# BSDA stands for Basic Statistics and Data Analysis
+library(BSDA)
+
+# Assume we "know" sigma = 0.35 for setosa Sepal.Length
+z.test(setosa$Sepal.Length,
+       mu      = 5.0,
+       sigma.x = 0.35)
+
+# Compare p-value to the t-test result above — nearly identical for n=50
+```
+
+### 1f. Non-parametric alternative: Wilcoxon test
+
+```{r}
+# Use when normality cannot be assumed and n is small
+
+# Two-sample Wilcoxon rank-sum (= Mann-Whitney U)
+wilcox.test(Sepal.Length ~ Species, data = sub2)
+
+# One-sample Wilcoxon signed-rank test
+wilcox.test(setosa$Sepal.Length, mu = 5.0)
+```
+
+### 1g. One-way ANOVA — comparing all three species
+
+```{r}
+# Question: Does mean Petal.Length differ across all three species?
+# H0: mu_setosa = mu_versicolor = mu_virginica
+
+fit_anova <- aov(Petal.Length ~ Species, data = iris)
+summary(fit_anova)
+
+# A significant F-test means at least one pair differs.
+# Use Tukey's HSD to find which pairs:
+TukeyHSD(fit_anova)
+```
+
+```{r}
+# Non-parametric alternative: Kruskal-Wallis
+kruskal.test(Petal.Length ~ Species, data = iris)
+```
+
+### 1h. Correlation test
+
+```{r}
+# Question: Is there a linear relationship between Sepal.Length and Petal.Length?
+# H0: rho = 0
+
+# Pearson (assumes bivariate normality)
+cor.test(iris$Sepal.Length, iris$Petal.Length, method = "pearson")
+
+# Spearman (non-parametric, rank-based)
+cor.test(iris$Sepal.Length, iris$Petal.Length, method = "spearman")
+
+# Visualize the relationship
+ggplot(iris, aes(x = Sepal.Length, y = Petal.Length, color = Species)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Sepal Length vs Petal Length") +
+  theme_minimal()
+```
+
+### 1i. Multiple testing correction
+
+```{r}
+# Run t-tests for all three pairwise species comparisons
+species_pairs <- list(
+  c("setosa",     "versicolor"),
+  c("setosa",     "virginica"),
+  c("versicolor", "virginica")
+)
+
+p_values <- sapply(species_pairs, function(pair) {
+  x1 <- iris$Sepal.Length[iris$Species == pair[1]]
+  x2 <- iris$Sepal.Length[iris$Species == pair[2]]
+  t.test(x1, x2)$p.value
+})
+
+names(p_values) <- sapply(species_pairs, paste, collapse = " vs ")
+p_values
+
+# Adjust for multiple comparisons
+p.adjust(p_values, method = "bonferroni")   # conservative
+p.adjust(p_values, method = "BH")           # FDR, less conservative
+```
+
+---
+
+## Part 2: UpSet Plot
+
+UpSet plots visualise intersections of multiple sets — a scalable alternative to Venn diagrams when you have more than 3 sets. Here we treat each iris measurement as a "set": a flower belongs to the set if its value exceeds the overall median.
+
+```{r}
+# install.packages("UpSetR")
+library(UpSetR)
+
+# Create a binary membership matrix:
+# 1 = this flower is ABOVE the overall median for that measurement
+# 0 = at or below the median
+
+upset_data <- data.frame(
+  long_sepal = as.integer(iris$Sepal.Length > median(iris$Sepal.Length)),
+  wide_sepal = as.integer(iris$Sepal.Width  > median(iris$Sepal.Width)),
+  long_petal = as.integer(iris$Petal.Length > median(iris$Petal.Length)),
+  wide_petal = as.integer(iris$Petal.Width  > median(iris$Petal.Width))
+)
+
+head(upset_data)
+```
+
+```{r}
+# Plot the UpSet diagram
+upset(
+  upset_data,
+  sets           = c("long_sepal", "wide_sepal", "long_petal", "wide_petal"),
+  order.by       = "freq",          # sort intersection bars by size
+  main.bar.color = "steelblue",     # colour of intersection bars
+  sets.bar.color = "darkorange",    # colour of set size bars (left)
+  text.scale     = 1.3,
+  mb.ratio       = c(0.6, 0.4)     # proportion: top bars vs dot matrix
+)
+
+# Reading the plot:
+# - Left horizontal bars: total number of above-median flowers per measurement
+# - Top vertical bars: size of each intersection (combination of traits)
+# - Dot matrix: which measurements are involved in each intersection
+# - Single dot = flowers above median in ONLY that measurement
+# - Connected dots = flowers above median in ALL connected measurements
+```
+
+---
+
+## Part 3: Custom Functions
+
+### 3a. Basic function syntax
+
+```{r}
+# A function to compute the standard error of a numeric vector
+std_error <- function(x) {
+  sd(x) / sqrt(length(x))
+}
+
+std_error(iris$Sepal.Length)
+std_error(iris$Petal.Length)
+```
+
+### 3b. Functions with default arguments
+
+```{r}
+# Summarise one measurement for one species
+# 'variable' has a default so it's optional
+summarise_species <- function(data, species_name,
+                               variable = "Sepal.Length") {
+  sub <- data[data$Species == species_name, variable]
+
+  list(
+    mean = mean(sub),
+    sd   = sd(sub),
+    se   = sd(sub) / sqrt(length(sub)),
+    n    = length(sub)
+  )
+}
+
+# Using the default variable
+summarise_species(iris, "setosa")
+
+# Overriding the default
+summarise_species(iris, "virginica", "Petal.Length")
+```
+
+### 3c. Applying a function across a list with `sapply` and `lapply`
+
+```{r}
+# Compute mean Petal.Length for every species without copy-pasting
+species_list <- levels(iris$Species)
+
+# sapply: simplifies to a vector/matrix where possible
+mean_petals <- sapply(species_list, function(sp) {
+  mean(iris$Petal.Length[iris$Species == sp])
+})
+mean_petals
+
+# lapply: always returns a list — useful when output is complex
+summaries <- lapply(species_list, function(sp) {
+  summarise_species(iris, sp, "Petal.Length")
+})
+names(summaries) <- species_list
+summaries[["setosa"]]
+```
+
+### 3d. A plotting function — reuse across measurements
+
+```{r}
+# Function to make a boxplot + jitter for any measurement
+plot_by_species <- function(data, variable, fill_colors = NULL) {
+
+  if (is.null(fill_colors))
+    fill_colors <- c("setosa"     = "#619CFF",
+                     "versicolor" = "#F8766D",
+                     "virginica"  = "#00BA38")
+
+  ggplot(data, aes(x = Species,
+                   y = .data[[variable]],
+                   fill = Species)) +
+    geom_boxplot(alpha = 0.6, show.legend = FALSE) +
+    geom_jitter(width = 0.15, alpha = 0.4, show.legend = FALSE) +
+    scale_fill_manual(values = fill_colors) +
+    labs(title = paste(variable, "by Species"),
+         y = variable, x = NULL) +
+    theme_minimal()
+}
+
+# Call once per measurement — same function, different data
+plot_by_species(iris, "Sepal.Length")
+plot_by_species(iris, "Petal.Length")
+plot_by_species(iris, "Petal.Width")
+```
+
+### 3e. Putting it all together — a mini analysis pipeline
+
+```{r}
+# A single function that runs the full pairwise comparison for one variable
+pairwise_analysis <- function(data, variable = "Sepal.Length") {
+
+  cat("=== Pairwise t-tests for", variable, "===\n\n")
+
+  pairs <- combn(levels(data$Species), 2, simplify = FALSE)
+
+  p_vals <- sapply(pairs, function(pair) {
+    x1 <- data[data$Species == pair[1], variable]
+    x2 <- data[data$Species == pair[2], variable]
+    t.test(x1, x2)$p.value
+  })
+
+  names(p_vals) <- sapply(pairs, paste, collapse = " vs ")
+
+  result <- data.frame(
+    comparison  = names(p_vals),
+    p_value     = round(p_vals, 4),
+    p_bonf      = round(p.adjust(p_vals, "bonferroni"), 4),
+    p_BH        = round(p.adjust(p_vals, "BH"), 4),
+    significant = p.adjust(p_vals, "BH") < 0.05
+  )
+
+  print(result)
+  invisible(result)
+}
+
+pairwise_analysis(iris, "Sepal.Length")
+pairwise_analysis(iris, "Petal.Length")
+```
